@@ -1,0 +1,16 @@
+name: hermes-browser
+label: Hermes Browser
+kind: platform
+version: 0.1.0
+description: Loopback-only WebSocket connector for Hermes Browser Extension.
+author: Peggy
+optional_env:
+  - name: HERMES_BROWSER_CONNECTOR_TOKEN
+    description: Browser pairing token
+    prompt: Pairing token
+    secret: true
+  - name: HERMES_BROWSER_CONNECTOR_PORT
+    description: Loopback WebSocket port
+    prompt: Connector port
+    secret: false
+
