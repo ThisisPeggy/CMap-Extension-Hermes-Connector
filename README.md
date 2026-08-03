@@ -6,11 +6,12 @@ loopback-only authenticated WebSocket and never opens Hermes to the network.
 ## Install
 
 ```bash
-hermes plugins install https://github.com/ThisisPeggy/hermes-browser-connector --enable
+hermes plugins install https://github.com/ThisisPeggy/hermes-browser-connector --enable --force
 ```
 
-The Browser extension generates a pairing token. Run the setup command once,
-then paste the token into the hidden prompt:
+`--force` makes the same command work for both a first install and an update of
+an existing Connector. The Browser extension generates a pairing token. Run
+the setup command once, then paste the token into the hidden prompt:
 
 ```bash
 python3 ~/.hermes/plugins/hermes-browser/connect.py
