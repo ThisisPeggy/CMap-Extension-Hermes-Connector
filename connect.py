@@ -2,6 +2,7 @@
 """Save the Browser pairing token in the Hermes environment."""
 
 import argparse
+import getpass
 import os
 import tempfile
 from pathlib import Path
@@ -9,10 +10,13 @@ from pathlib import Path
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--token", required=True)
+    parser.add_argument(
+        "--token",
+        help="Deprecated: omit this option and paste the token into the hidden prompt.",
+    )
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
-    token = args.token.strip()
+    token = (args.token or getpass.getpass("Paste Hermes Browser pairing token: ")).strip()
     if len(token) < 32 or any(ch.isspace() for ch in token):
         raise SystemExit("Invalid Hermes Browser pairing token.")
     if not 1024 <= args.port <= 65535:
@@ -50,4 +54,3 @@ def _write_env(values):
 
 if __name__ == "__main__":
     main()
-

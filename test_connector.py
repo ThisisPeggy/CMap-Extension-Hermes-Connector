@@ -1,17 +1,50 @@
 import importlib.util
+import os
+import stat
+import tempfile
+import unittest
 from pathlib import Path
+from unittest import mock
+
+from protocol import authenticated_subprotocol, token_subprotocol
 
 
-def test_manifest_and_pairing_script_exist():
-    root = Path(__file__).parent
-    assert (root / "plugin.yaml").is_file()
-    assert (root / "connect.py").is_file()
+class ConnectorTests(unittest.TestCase):
+    def test_manifest_and_pairing_script_exist(self):
+        root = Path(__file__).parent
+        self.assertTrue((root / "plugin.yaml").is_file())
+        self.assertTrue((root / "connect.py").is_file())
+
+    def test_connect_module_loads(self):
+        module = _load_connect_module("browser_connect")
+        self.assertTrue(callable(module._write_env))
+
+    def test_pairing_token_uses_authenticated_websocket_subprotocol(self):
+        token = "a" * 64
+        protocol = token_subprotocol(token)
+        self.assertEqual(protocol, f"hermes-browser-token.{token}")
+        self.assertEqual(authenticated_subprotocol(f"chat, {protocol}", token), protocol)
+        self.assertEqual(authenticated_subprotocol("hermes-browser-token.wrong", token), "")
+
+    def test_env_file_is_replaced_without_leaking_permissions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / ".env"
+            path.write_text("KEEP=yes\nHERMES_BROWSER_CONNECTOR_TOKEN=old\n", encoding="utf-8")
+            module = _load_connect_module("browser_connect_env")
+            with mock.patch.dict(os.environ, {"HERMES_HOME": str(root)}):
+                module._write_env({"HERMES_BROWSER_CONNECTOR_TOKEN": "new"})
+            self.assertEqual(path.read_text(encoding="utf-8"), "KEEP=yes\nHERMES_BROWSER_CONNECTOR_TOKEN=new\n")
+            self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
 
 
-def test_connect_module_loads():
+def _load_connect_module(name):
     path = Path(__file__).parent / "connect.py"
-    spec = importlib.util.spec_from_file_location("browser_connect", path)
+    spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    assert callable(module._write_env)
+    return module
 
+
+if __name__ == "__main__":
+    unittest.main()
