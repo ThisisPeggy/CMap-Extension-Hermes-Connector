@@ -19,8 +19,14 @@ function Get-HermesHome {
 
 function Test-GitCheckout {
     param([string]$Path)
-    & git -C $Path rev-parse --is-inside-work-tree *> $null
-    return $LASTEXITCODE -eq 0
+    try {
+        $gitDir = Join-Path $Path '.git'
+        return ((Test-Path -LiteralPath (Join-Path $gitDir 'HEAD') -PathType Leaf) -and
+            (Test-Path -LiteralPath (Join-Path $gitDir 'config') -PathType Leaf) -and
+            (Test-Path -LiteralPath (Join-Path $gitDir 'objects') -PathType Container))
+    } catch {
+        return $false
+    }
 }
 
 function Move-BrokenConnector {

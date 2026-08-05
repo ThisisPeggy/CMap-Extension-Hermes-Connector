@@ -60,6 +60,7 @@ class ConnectorTests(unittest.TestCase):
         self.assertIn('git -C "$plugin_dir" fetch', shell)
         self.assertIn("Test-GitCheckout", powershell)
         self.assertIn("Move-BrokenConnector", powershell)
+        self.assertNotIn("rev-parse --is-inside-work-tree *> $null", powershell)
         self.assertIn("plugin-backups", powershell)
         self.assertIn("plugin-backups", shell)
         self.assertNotIn("--force }", powershell)
