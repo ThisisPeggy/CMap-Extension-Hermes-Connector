@@ -17,6 +17,35 @@ function Get-HermesHome {
     return (Join-Path $env:LOCALAPPDATA 'hermes')
 }
 
+function Test-GitCheckout {
+    param([string]$Path)
+    & git -C $Path rev-parse --is-inside-work-tree *> $null
+    return $LASTEXITCODE -eq 0
+}
+
+function Move-BrokenConnector {
+    param([string]$Path, [string]$HermesHome)
+    $backupRoot = Join-Path $HermesHome 'plugin-backups'
+    $backupName = 'hermes-browser-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
+    $backupPath = Join-Path $backupRoot $backupName
+    try {
+        New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+        Move-Item -LiteralPath $Path -Destination $backupPath -ErrorAction Stop
+        Write-Host "Moved the incomplete Connector to $backupPath"
+    } catch {
+        throw @"
+The existing Connector is incomplete and Windows denied access to it:
+  $Path
+
+Close programs using that folder and run these commands once from PowerShell opened as Administrator:
+  takeown.exe /F `"$Path`" /R /D Y
+  icacls.exe `"$Path`" /grant `"${env:USERNAME}:(OI)(CI)F`" /T /C
+
+Then run the install command again.
+"@
+    }
+}
+
 try {
     Get-Command hermes -ErrorAction Stop | Out-Null
     Get-Command git -ErrorAction Stop | Out-Null
@@ -27,28 +56,18 @@ try {
     $hermesHome = Get-HermesHome
     $pluginDir = Join-Path (Join-Path $hermesHome 'plugins') $pluginName
 
-    if (Test-Path -LiteralPath $pluginDir) {
+    if ((Test-Path -LiteralPath $pluginDir) -and (Test-GitCheckout $pluginDir)) {
         Write-Host 'Updating Hermes Browser Connector...'
-        try {
-            Get-Item -LiteralPath (Join-Path $pluginDir '.git') -Force -ErrorAction Stop | Out-Null
-        } catch {
-            throw @"
-Windows denied access to the existing Connector:
-  $pluginDir
-
-Close programs using that folder and run this command once from PowerShell opened as Administrator:
-  takeown.exe /F `"$pluginDir`" /R /D Y
-  icacls.exe `"$pluginDir`" /grant `"${env:USERNAME}:(OI)(CI)F`" /T /C
-
-Then run the install command again.
-"@
-        }
         Get-ChildItem -LiteralPath $pluginDir -Force -Recurse -File -ErrorAction SilentlyContinue |
             ForEach-Object { if ($_.IsReadOnly) { $_.IsReadOnly = $false } }
         Invoke-Checked { git -C $pluginDir fetch --prune origin } 'Could not download the Connector update.'
         Invoke-Checked { git -C $pluginDir checkout --force origin/main } 'Could not activate the Connector update.'
         Invoke-Checked { hermes plugins enable $pluginName --no-allow-tool-override } 'Connector update succeeded, but enabling it failed.'
     } else {
+        if (Test-Path -LiteralPath $pluginDir) {
+            Write-Host 'Repairing an incomplete Connector installation...'
+            Move-BrokenConnector $pluginDir $hermesHome
+        }
         Write-Host 'Installing Hermes Browser Connector...'
         Invoke-Checked { hermes plugins install $repository --enable } 'Connector installation failed.'
     }

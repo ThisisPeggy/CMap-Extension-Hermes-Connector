@@ -58,6 +58,10 @@ class ConnectorTests(unittest.TestCase):
         shell = (root / "install.sh").read_text(encoding="utf-8")
         self.assertIn("git -C $pluginDir fetch", powershell)
         self.assertIn('git -C "$plugin_dir" fetch', shell)
+        self.assertIn("Test-GitCheckout", powershell)
+        self.assertIn("Move-BrokenConnector", powershell)
+        self.assertIn("plugin-backups", powershell)
+        self.assertIn("plugin-backups", shell)
         self.assertNotIn("--force }", powershell)
         self.assertNotIn('plugins install "$repository" --enable --force', shell)
 
