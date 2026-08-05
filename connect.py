@@ -8,6 +8,17 @@ import tempfile
 from pathlib import Path
 
 
+def _hermes_home(platform=None):
+    configured = os.environ.get("HERMES_HOME")
+    if configured:
+        return Path(configured).expanduser()
+    if (platform or os.name) == "nt":
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            return Path(local_appdata) / "hermes"
+    return Path.home() / ".hermes"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -31,7 +42,7 @@ def main():
 
 
 def _write_env(values):
-    home = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+    home = _hermes_home()
     home.mkdir(parents=True, exist_ok=True)
     path = home / ".env"
     lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []

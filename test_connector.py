@@ -19,6 +19,20 @@ class ConnectorTests(unittest.TestCase):
         module = _load_connect_module("browser_connect")
         self.assertTrue(callable(module._write_env))
 
+    def test_windows_default_home_uses_local_appdata(self):
+        module = _load_connect_module("browser_connect_windows_home")
+        env = {"LOCALAPPDATA": r"C:\Users\test\AppData\Local"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(
+                module._hermes_home(platform="nt"),
+                Path(r"C:\Users\test\AppData\Local") / "hermes",
+            )
+
+    def test_explicit_hermes_home_wins(self):
+        module = _load_connect_module("browser_connect_custom_home")
+        with mock.patch.dict(os.environ, {"HERMES_HOME": "/custom/hermes"}, clear=True):
+            self.assertEqual(module._hermes_home(), Path("/custom/hermes"))
+
     def test_pairing_token_uses_authenticated_websocket_subprotocol(self):
         token = "a" * 64
         protocol = token_subprotocol(token)
@@ -35,7 +49,17 @@ class ConnectorTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {"HERMES_HOME": str(root)}):
                 module._write_env({"HERMES_BROWSER_CONNECTOR_TOKEN": "new"})
             self.assertEqual(path.read_text(encoding="utf-8"), "KEEP=yes\nHERMES_BROWSER_CONNECTOR_TOKEN=new\n")
-            self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+            if os.name != "nt":
+                self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+
+    def test_installers_update_without_force_reinstall(self):
+        root = Path(__file__).parent
+        powershell = (root / "install.ps1").read_text(encoding="utf-8")
+        shell = (root / "install.sh").read_text(encoding="utf-8")
+        self.assertIn("git -C $pluginDir fetch", powershell)
+        self.assertIn('git -C "$plugin_dir" fetch', shell)
+        self.assertNotIn("--force }", powershell)
+        self.assertNotIn('plugins install "$repository" --enable --force', shell)
 
 
 def _load_connect_module(name):
