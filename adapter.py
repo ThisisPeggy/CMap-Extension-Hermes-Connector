@@ -1,9 +1,13 @@
 """Loopback WebSocket platform adapter for Hermes Browser."""
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
 import os
+import re
+import tempfile
 import uuid
 from datetime import datetime
 
@@ -14,6 +18,11 @@ from gateway.platforms.base import BasePlatformAdapter, MessageEvent, MessageTyp
 from .protocol import authenticated_subprotocol
 
 logger = logging.getLogger(__name__)
+MAX_VOICE_AUDIO_BYTES = 15 * 1024 * 1024
+VOICE_AUDIO_SUFFIXES = {
+    "audio/webm": ".webm", "audio/ogg": ".ogg", "audio/mp4": ".m4a",
+    "audio/wav": ".wav", "audio/mpeg": ".mp3",
+}
 
 
 class BrowserAdapter(BasePlatformAdapter):
@@ -62,7 +71,7 @@ class BrowserAdapter(BasePlatformAdapter):
         )
         if not protocol:
             raise web.HTTPUnauthorized()
-        ws = web.WebSocketResponse(protocols=(protocol,), heartbeat=30, max_msg_size=2_000_000)
+        ws = web.WebSocketResponse(protocols=(protocol,), heartbeat=30, max_msg_size=22_000_000)
         await ws.prepare(request)
         self.clients.add(ws)
         await _event(ws, "gateway.ready", payload={
@@ -74,6 +83,7 @@ class BrowserAdapter(BasePlatformAdapter):
                 "session_create": True,
                 "session_resume": True,
                 "session_interrupt": True,
+                "voice_transcribe": True,
                 "session_list": False,
                 "session_history": False,
                 "model_options": False,
@@ -128,8 +138,49 @@ class BrowserAdapter(BasePlatformAdapter):
             session_id = str(params.get("session_id") or "").strip()
             count = await self._cancel_turns(ws=ws, session_id=session_id)
             await _result(ws, request_id, {"interrupted": count > 0, "count": count})
+        elif method == "voice.transcribe":
+            try:
+                result = await self._transcribe_voice(params)
+            except ValueError as exc:
+                await _error(ws, request_id, -32602, str(exc))
+            except Exception as exc:
+                logger.warning("Browser voice transcription failed: %s", exc)
+                await _error(ws, request_id, -32002, "Hermes voice transcription failed")
+            else:
+                await _result(ws, request_id, result)
         else:
             await _error(ws, request_id, -32601, f"Connector method not supported: {method or '(missing)'}")
+
+    async def _transcribe_voice(self, params):
+        data_url = str(params.get("data_url") or "")
+        mime_type = str(params.get("mime_type") or "audio/webm").split(";", 1)[0].lower()
+        match = re.fullmatch(r"data:([^;,]+);base64,([A-Za-z0-9+/=]+)", data_url)
+        if not match:
+            raise ValueError("invalid-audio-payload")
+        suffix = VOICE_AUDIO_SUFFIXES.get(mime_type or match.group(1).lower())
+        if not suffix:
+            raise ValueError("unsupported-audio-type")
+        try:
+            audio = base64.b64decode(match.group(2), validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError("invalid-audio-payload") from exc
+        if not audio or len(audio) > MAX_VOICE_AUDIO_BYTES:
+            raise ValueError("audio-size-limit")
+        path = ""
+        try:
+            with tempfile.NamedTemporaryFile(prefix="hermes-browser-voice-", suffix=suffix, delete=False) as handle:
+                path = handle.name
+                handle.write(audio)
+            from tools.transcription_tools import transcribe_audio
+            result = await asyncio.to_thread(transcribe_audio, path)
+            transcript = result.get("text", "") if isinstance(result, dict) else str(result or "")
+            return {"ok": bool(str(transcript).strip()), "transcript": str(transcript).strip()}
+        finally:
+            if path:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
 
     async def _prompt(self, ws, params):
         session_id = str(params.get("session_id") or uuid.uuid4())
