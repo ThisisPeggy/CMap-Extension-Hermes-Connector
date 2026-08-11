@@ -173,7 +173,7 @@ class BrowserAdapter(BasePlatformAdapter):
                 handle.write(audio)
             from tools.transcription_tools import transcribe_audio
             result = await asyncio.to_thread(transcribe_audio, path)
-            transcript = result.get("text", "") if isinstance(result, dict) else str(result or "")
+            transcript = result.get("transcript", result.get("text", "")) if isinstance(result, dict) else str(result or "")
             return {"ok": bool(str(transcript).strip()), "transcript": str(transcript).strip()}
         finally:
             if path:
