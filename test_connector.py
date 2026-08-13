@@ -1,4 +1,5 @@
 import importlib.util
+import sys
 import os
 import stat
 import tempfile
@@ -66,12 +67,80 @@ class ConnectorTests(unittest.TestCase):
         self.assertNotIn("--force }", powershell)
         self.assertNotIn('plugins install "$repository" --enable --force', shell)
 
+    def test_session_list_uses_browser_chat_identity_and_preserves_database_id(self):
+        adapter = _load_adapter().BrowserAdapter.__new__(_load_adapter().BrowserAdapter)
+        adapter._browser_session_rows = lambda limit=500: [
+            {
+                "id": "db-session-one",
+                "chat_id": "browser-chat-one",
+                "title": "First conversation",
+                "source": "hermes_browser",
+                "message_count": 3,
+            },
+            {
+                "id": "db-session-two",
+                "chat_id": "browser-chat-two",
+                "title": "Second conversation",
+                "source": "hermes_browser",
+                "message_count": 5,
+            },
+        ]
+
+        rows = adapter._list_sessions({"limit": 20})
+
+        self.assertEqual([row["id"] for row in rows], ["browser-chat-one", "browser-chat-two"])
+        self.assertEqual(
+            [row["history_session_id"] for row in rows],
+            ["db-session-one", "db-session-two"],
+        )
+
+    def test_session_history_resolves_each_browser_chat_to_its_database_session(self):
+        module = _load_adapter()
+        adapter = module.BrowserAdapter.__new__(module.BrowserAdapter)
+        adapter._browser_session_rows = lambda limit=500: [
+            {"id": "db-session-one", "chat_id": "browser-chat-one"},
+            {"id": "db-session-two", "chat_id": "browser-chat-two"},
+        ]
+
+        class FakeSessionDB:
+            def get_messages_as_conversation(self, session_id, include_ancestors=False):
+                return [{"role": "assistant", "content": f"history:{session_id}"}]
+
+        adapter._session_db = lambda: FakeSessionDB()
+
+        first = adapter._session_history("browser-chat-one")
+        second = adapter._session_history("browser-chat-two")
+
+        self.assertEqual(first[0]["content"], "history:db-session-one")
+        self.assertEqual(second[0]["content"], "history:db-session-two")
+        self.assertNotEqual(first, second)
+
 
 def _load_connect_module(name):
     path = Path(__file__).parent / "connect.py"
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def _load_adapter():
+    name = "hermes_browser_connector_test_package"
+    if f"{name}.adapter" in sys.modules:
+        return sys.modules[f"{name}.adapter"]
+    root = Path(__file__).parent
+    package_spec = importlib.util.spec_from_file_location(
+        name,
+        root / "__init__.py",
+        submodule_search_locations=[str(root)],
+    )
+    package = importlib.util.module_from_spec(package_spec)
+    sys.modules[name] = package
+    package_spec.loader.exec_module(package)
+    adapter_spec = importlib.util.spec_from_file_location(f"{name}.adapter", root / "adapter.py")
+    module = importlib.util.module_from_spec(adapter_spec)
+    sys.modules[f"{name}.adapter"] = module
+    adapter_spec.loader.exec_module(module)
     return module
 
 

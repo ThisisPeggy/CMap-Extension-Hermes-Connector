@@ -19,6 +19,7 @@ from .protocol import authenticated_subprotocol
 
 logger = logging.getLogger(__name__)
 MAX_VOICE_AUDIO_BYTES = 15 * 1024 * 1024
+MAX_SESSION_LIST_LIMIT = 500
 VOICE_AUDIO_SUFFIXES = {
     "audio/webm": ".webm", "audio/ogg": ".ogg", "audio/mp4": ".m4a",
     "audio/wav": ".wav", "audio/mpeg": ".mp3",
@@ -77,15 +78,15 @@ class BrowserAdapter(BasePlatformAdapter):
         await _event(ws, "gateway.ready", payload={
             "protocol": 1,
             "connector": "hermes-browser",
-            "version": "0.2.0",
+            "version": "0.3.1",
             "capabilities": {
                 "prompt_submit": True,
                 "session_create": True,
                 "session_resume": True,
                 "session_interrupt": True,
                 "voice_transcribe": True,
-                "session_list": False,
-                "session_history": False,
+                "session_list": True,
+                "session_history": True,
                 "model_options": False,
             },
         })
@@ -118,6 +119,28 @@ class BrowserAdapter(BasePlatformAdapter):
         if method in {"session.create", "session.resume"}:
             session_id = str(params.get("session_id") or uuid.uuid4())
             await _result(ws, request_id, {"session_id": session_id, "stored_session_id": session_id})
+        elif method == "session.list":
+            try:
+                rows = await asyncio.to_thread(self._list_sessions, params)
+            except Exception as exc:
+                logger.warning("Browser session list failed: %s", exc)
+                await _error(ws, request_id, -32003, "Hermes session list failed")
+            else:
+                await _result(ws, request_id, {"sessions": rows})
+        elif method == "session.history":
+            session_id = str(params.get("session_id") or "").strip()
+            if not session_id:
+                await _error(ws, request_id, -32602, "session_id is required")
+                return
+            try:
+                messages = await asyncio.to_thread(self._session_history, session_id)
+            except LookupError:
+                await _error(ws, request_id, -32004, "Hermes Browser session not found")
+            except Exception as exc:
+                logger.warning("Browser session history failed: %s", exc)
+                await _error(ws, request_id, -32005, "Hermes session history failed")
+            else:
+                await _result(ws, request_id, {"messages": messages})
         elif method == "prompt.submit":
             session_id = str(params.get("session_id") or "").strip()
             text = str(params.get("text") or "").strip()
@@ -150,6 +173,62 @@ class BrowserAdapter(BasePlatformAdapter):
                 await _result(ws, request_id, result)
         else:
             await _error(ws, request_id, -32601, f"Connector method not supported: {method or '(missing)'}")
+
+    @staticmethod
+    def _session_db():
+        from hermes_state import SessionDB
+        return SessionDB(read_only=True)
+
+    def _browser_session_rows(self, limit=MAX_SESSION_LIST_LIMIT):
+        db = self._session_db()
+        try:
+            return db.list_sessions_rich(
+                source="hermes_browser",
+                limit=max(1, min(MAX_SESSION_LIST_LIMIT, int(limit or 200))),
+                min_message_count=1,
+                order_by_last_active=True,
+                compact_rows=True,
+            )
+        finally:
+            close = getattr(db, "close", None)
+            if callable(close):
+                close()
+
+    def _list_sessions(self, params):
+        limit = params.get("limit", 200) if isinstance(params, dict) else 200
+        rows = self._browser_session_rows(limit)
+        sessions = []
+        for row in rows:
+            chat_id = str(row.get("chat_id") or "").strip()
+            database_id = str(row.get("id") or "").strip()
+            if not chat_id or not database_id:
+                continue
+            sessions.append({
+                **row,
+                "id": chat_id,
+                "history_session_id": database_id,
+                "session_key": chat_id,
+                "source": "hermes_browser",
+            })
+        return sessions
+
+    def _session_history(self, chat_id):
+        row = next(
+            (item for item in self._browser_session_rows() if str(item.get("chat_id") or "") == chat_id),
+            None,
+        )
+        if row is None:
+            raise LookupError(chat_id)
+        db = self._session_db()
+        try:
+            return db.get_messages_as_conversation(
+                str(row["id"]),
+                include_ancestors=True,
+            )
+        finally:
+            close = getattr(db, "close", None)
+            if callable(close):
+                close()
 
     async def _transcribe_voice(self, params):
         data_url = str(params.get("data_url") or "")
