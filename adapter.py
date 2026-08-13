@@ -78,7 +78,7 @@ class BrowserAdapter(BasePlatformAdapter):
         await _event(ws, "gateway.ready", payload={
             "protocol": 1,
             "connector": "hermes-browser",
-            "version": "0.3.1",
+            "version": "0.3.2",
             "capabilities": {
                 "prompt_submit": True,
                 "session_create": True,
@@ -87,6 +87,7 @@ class BrowserAdapter(BasePlatformAdapter):
                 "voice_transcribe": True,
                 "session_list": True,
                 "session_history": True,
+                "session_delete_all": True,
                 "model_options": False,
             },
         })
@@ -141,6 +142,20 @@ class BrowserAdapter(BasePlatformAdapter):
                 await _error(ws, request_id, -32005, "Hermes session history failed")
             else:
                 await _result(ws, request_id, {"messages": messages})
+        elif method == "session.delete_all":
+            if params.get("source") != "hermes_browser" or params.get("confirm") is not True:
+                await _error(ws, request_id, -32602, "source=hermes_browser and confirm=true are required")
+                return
+            if self.tasks:
+                await _error(ws, request_id, -32006, "Wait for active Browser turns to finish before clearing chats")
+                return
+            try:
+                deleted = await asyncio.to_thread(self._delete_all_sessions)
+            except Exception as exc:
+                logger.warning("Browser session deletion failed: %s", exc)
+                await _error(ws, request_id, -32007, "Hermes Browser session deletion failed")
+            else:
+                await _result(ws, request_id, {"deleted": deleted, "source": "hermes_browser"})
         elif method == "prompt.submit":
             session_id = str(params.get("session_id") or "").strip()
             text = str(params.get("text") or "").strip()
@@ -175,9 +190,9 @@ class BrowserAdapter(BasePlatformAdapter):
             await _error(ws, request_id, -32601, f"Connector method not supported: {method or '(missing)'}")
 
     @staticmethod
-    def _session_db():
+    def _session_db(read_only=True):
         from hermes_state import SessionDB
-        return SessionDB(read_only=True)
+        return SessionDB(read_only=read_only)
 
     def _browser_session_rows(self, limit=MAX_SESSION_LIST_LIMIT):
         db = self._session_db()
@@ -224,6 +239,41 @@ class BrowserAdapter(BasePlatformAdapter):
             return db.get_messages_as_conversation(
                 str(row["id"]),
                 include_ancestors=True,
+            )
+        finally:
+            close = getattr(db, "close", None)
+            if callable(close):
+                close()
+
+    def _delete_all_sessions(self):
+        from hermes_constants import get_hermes_home
+
+        db = self._session_db(read_only=False)
+        try:
+            session_ids = []
+            offset = 0
+            while True:
+                rows = db.list_sessions_rich(
+                    source="hermes_browser",
+                    limit=MAX_SESSION_LIST_LIMIT,
+                    offset=offset,
+                    include_children=True,
+                    min_message_count=0,
+                    project_compression_tips=False,
+                    order_by_last_active=True,
+                    include_archived=True,
+                    compact_rows=True,
+                )
+                if not rows:
+                    break
+                session_ids.extend(str(row.get("id") or "") for row in rows)
+                if len(rows) < MAX_SESSION_LIST_LIMIT:
+                    break
+                offset += len(rows)
+            sessions_dir = get_hermes_home() / "sessions"
+            return sum(
+                1 for session_id in dict.fromkeys(filter(None, session_ids))
+                if db.delete_session(session_id, sessions_dir=sessions_dir)
             )
         finally:
             close = getattr(db, "close", None)

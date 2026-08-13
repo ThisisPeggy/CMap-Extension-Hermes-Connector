@@ -115,6 +115,36 @@ class ConnectorTests(unittest.TestCase):
         self.assertEqual(second[0]["content"], "history:db-session-two")
         self.assertNotEqual(first, second)
 
+    def test_delete_all_sessions_removes_only_browser_database_rows(self):
+        module = _load_adapter()
+        adapter = module.BrowserAdapter.__new__(module.BrowserAdapter)
+
+        class FakeSessionDB:
+            def __init__(self):
+                self.deleted = []
+
+            def list_sessions_rich(self, **options):
+                self.options = options
+                return [
+                    {"id": "browser-db-one", "source": "hermes_browser"},
+                    {"id": "browser-db-two", "source": "hermes_browser"},
+                ]
+
+            def delete_session(self, session_id, sessions_dir=None):
+                self.deleted.append((session_id, sessions_dir))
+                return True
+
+        database = FakeSessionDB()
+        adapter._session_db = lambda read_only=True: database
+
+        deleted = adapter._delete_all_sessions()
+
+        self.assertEqual(deleted, 2)
+        self.assertEqual([item[0] for item in database.deleted], ["browser-db-one", "browser-db-two"])
+        self.assertEqual(database.options["source"], "hermes_browser")
+        self.assertTrue(database.options["include_children"])
+        self.assertTrue(database.options["include_archived"])
+
 
 def _load_connect_module(name):
     path = Path(__file__).parent / "connect.py"
