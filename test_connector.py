@@ -145,6 +145,88 @@ class ConnectorTests(unittest.TestCase):
         self.assertTrue(database.options["include_children"])
         self.assertTrue(database.options["include_archived"])
 
+    def test_image_attachment_validates_magic_and_stages_cached_media(self):
+        module = _load_adapter()
+        adapter = module.BrowserAdapter.__new__(module.BrowserAdapter)
+        adapter.attachments = {}
+        png = b"\x89PNG\r\n\x1a\n" + b"safe-image-bytes"
+        data_url = "data:image/png;base64," + __import__("base64").b64encode(png).decode("ascii")
+
+        with mock.patch.object(module, "cache_image_from_bytes", return_value="cached/image.png") as cache:
+            result = adapter._stage_image({
+                "session_id": "browser-session",
+                "data_url": data_url,
+                "filename": "photo.png",
+            })
+
+        cache.assert_called_once_with(png, ext=".png")
+        self.assertTrue(result["attached"])
+        self.assertEqual(adapter.attachments["browser-session"][0]["mime_type"], "image/png")
+
+    def test_image_attachment_rejects_declared_image_without_image_magic(self):
+        module = _load_adapter()
+        adapter = module.BrowserAdapter.__new__(module.BrowserAdapter)
+        adapter.attachments = {}
+        payload = __import__("base64").b64encode(b"not-an-image").decode("ascii")
+
+        with self.assertRaisesRegex(ValueError, "invalid image"):
+            adapter._stage_image({
+                "session_id": "browser-session",
+                "data_url": f"data:image/png;base64,{payload}",
+            })
+
+    def test_file_attachment_sanitizes_name_and_rejects_unapproved_types(self):
+        module = _load_adapter()
+        adapter = module.BrowserAdapter.__new__(module.BrowserAdapter)
+        adapter.attachments = {}
+        payload = __import__("base64").b64encode(b"document").decode("ascii")
+
+        with mock.patch.object(module, "cache_document_from_bytes", return_value="cached/quote.pdf") as cache:
+            result = adapter._stage_file({
+                "session_id": "browser-session",
+                "data_url": f"data:application/pdf;base64,{payload}",
+                "name": "../../quote.pdf",
+            })
+
+        cache.assert_called_once_with(b"document", "quote.pdf")
+        self.assertTrue(result["attached"])
+        with self.assertRaisesRegex(ValueError, "unsupported file type"):
+            adapter._stage_file({
+                "session_id": "browser-session",
+                "data_url": f"data:application/octet-stream;base64,{payload}",
+                "name": "payload.exe",
+            })
+
+
+class ConnectorAttachmentPromptTests(unittest.IsolatedAsyncioTestCase):
+    async def test_prompt_forwards_staged_media_to_the_gateway_event(self):
+        module = _load_adapter()
+        adapter = module.BrowserAdapter.__new__(module.BrowserAdapter)
+        adapter.pending = {}
+        adapter.build_source = lambda **_kwargs: object()
+        captured = []
+
+        async def handle_message(event):
+            captured.append(event)
+            adapter.pending["browser-session"]["completion"].set_result("")
+
+        class FakeWebSocket:
+            async def send_json(self, _frame):
+                return None
+
+        adapter.handle_message = handle_message
+        await adapter._prompt(FakeWebSocket(), {
+            "session_id": "browser-session",
+            "text": "inspect",
+            "_attachments": [
+                {"path": "cached/image.png", "mime_type": "image/png", "size": 12},
+                {"path": "cached/quote.pdf", "mime_type": "application/pdf", "size": 20},
+            ],
+        })
+
+        self.assertEqual(captured[0].media_urls, ["cached/image.png", "cached/quote.pdf"])
+        self.assertEqual(captured[0].media_types, ["image/png", "application/pdf"])
+
 
 def _load_connect_module(name):
     path = Path(__file__).parent / "connect.py"

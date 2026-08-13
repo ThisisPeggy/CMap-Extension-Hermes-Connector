@@ -32,3 +32,12 @@ The connector listens on `127.0.0.1:8765`. The token is stored in Hermes's
 `.env` file with private permissions, is carried in the WebSocket subprotocol (not
 the URL), and never needs to appear in shell history or process arguments. No
 public port or Hermes API key is needed.
+
+## Attachment boundary
+
+The Connector accepts only the explicit `image.attach_bytes` and `file.attach`
+RPCs used by the extension. Attachments are base64 data URLs, are capped at
+10 MB each (12 files / 50 MB pending per session), and are written only through
+Hermes's image and document cache helpers. Image magic bytes and document
+extensions are validated before a staged attachment is passed to the existing
+Hermes media pipeline. Unknown RPC methods remain blocked.
