@@ -161,7 +161,7 @@ class ConnectorTests(unittest.TestCase):
 
         cache.assert_called_once_with(png, ext=".png")
         self.assertTrue(result["attached"])
-        self.assertEqual(adapter.attachments["browser-session"][0]["mime_type"], "image/png")
+        self.assertEqual(adapter.attachments[(0, "browser-session")][0]["mime_type"], "image/png")
 
     def test_image_attachment_rejects_declared_image_without_image_magic(self):
         module = _load_adapter()
@@ -226,6 +226,29 @@ class ConnectorAttachmentPromptTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(captured[0].media_urls, ["cached/image.png", "cached/quote.pdf"])
         self.assertEqual(captured[0].media_types, ["image/png", "application/pdf"])
+
+    async def test_staged_attachments_are_isolated_by_websocket_owner(self):
+        module = _load_adapter()
+        adapter = module.BrowserAdapter.__new__(module.BrowserAdapter)
+        adapter.attachments = {}
+        adapter.attachment_lock = __import__("threading").Lock()
+        first = object()
+        second = object()
+        adapter._append_attachment(first, "shared-session", {
+            "path": "cached/first.png", "mime_type": "image/png", "size": 10,
+        })
+        adapter._append_attachment(second, "shared-session", {
+            "path": "cached/second.png", "mime_type": "image/png", "size": 10,
+        })
+
+        self.assertEqual(
+            [item["path"] for item in adapter._take_attachments(first, "shared-session")],
+            ["cached/first.png"],
+        )
+        self.assertEqual(
+            [item["path"] for item in adapter._take_attachments(second, "shared-session")],
+            ["cached/second.png"],
+        )
 
 
 def _load_connect_module(name):

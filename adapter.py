@@ -81,8 +81,7 @@ class BrowserAdapter(BasePlatformAdapter):
         for client in list(self.clients):
             await client.close()
         self.clients.clear()
-        with self.attachment_lock:
-            self.attachments.clear()
+        self._discard_all_attachments()
         if self.runner:
             await self.runner.cleanup()
         self.runner = None
@@ -132,6 +131,7 @@ class BrowserAdapter(BasePlatformAdapter):
                     break
         finally:
             await self._cancel_turns(ws=ws)
+            self._discard_client_attachments(ws)
             self.clients.discard(ws)
         return ws
 
@@ -183,7 +183,7 @@ class BrowserAdapter(BasePlatformAdapter):
                 await _result(ws, request_id, {"deleted": deleted, "source": "hermes_browser"})
         elif method == "image.attach_bytes":
             try:
-                result = await asyncio.to_thread(self._stage_image, params)
+                result = await asyncio.to_thread(self._stage_image, params, ws)
             except ValueError as exc:
                 await _error(ws, request_id, -32602, str(exc))
             except Exception as exc:
@@ -193,7 +193,7 @@ class BrowserAdapter(BasePlatformAdapter):
                 await _result(ws, request_id, result)
         elif method == "file.attach":
             try:
-                result = await asyncio.to_thread(self._stage_file, params)
+                result = await asyncio.to_thread(self._stage_file, params, ws)
             except ValueError as exc:
                 await _error(ws, request_id, -32602, str(exc))
             except Exception as exc:
@@ -213,8 +213,7 @@ class BrowserAdapter(BasePlatformAdapter):
             if session_id in self.tasks:
                 await _error(ws, request_id, -32001, "A Browser turn is already running for this session")
                 return
-            with self.attachment_lock:
-                attachments = self.attachments.pop(session_id, [])
+            attachments = self._take_attachments(ws, session_id)
             await _result(ws, request_id, {"status": "streaming"})
             task = asyncio.create_task(self._prompt(ws, {
                 **params,
@@ -375,12 +374,49 @@ class BrowserAdapter(BasePlatformAdapter):
             return ".webp", "image/webp"
         raise ValueError("unsupported or invalid image payload")
 
-    def _append_attachment(self, session_id, attachment):
+    @staticmethod
+    def _attachment_owner_key(owner, session_id):
+        return (id(owner) if owner is not None else 0, session_id)
+
+    @staticmethod
+    def _unlink_staged_attachment(attachment):
+        path = str(attachment.get("path") or "")
+        if not path:
+            return
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+    def _discard_client_attachments(self, owner):
+        owner_id = id(owner)
+        discarded = []
+        with self.attachment_lock:
+            keys = [key for key in self.attachments if key[0] == owner_id]
+            for key in keys:
+                discarded.extend(self.attachments.pop(key, []))
+        for attachment in discarded:
+            self._unlink_staged_attachment(attachment)
+
+    def _discard_all_attachments(self):
+        with self.attachment_lock:
+            discarded = [attachment for rows in self.attachments.values() for attachment in rows]
+            self.attachments.clear()
+        for attachment in discarded:
+            self._unlink_staged_attachment(attachment)
+
+    def _take_attachments(self, owner, session_id):
+        key = self._attachment_owner_key(owner, session_id)
+        with self.attachment_lock:
+            return self.attachments.pop(key, [])
+
+    def _append_attachment(self, owner, session_id, attachment):
         lock = getattr(self, "attachment_lock", None)
         if lock is None:
             lock = self.attachment_lock = threading.Lock()
         with lock:
-            pending = self.attachments.setdefault(session_id, [])
+            key = self._attachment_owner_key(owner, session_id)
+            pending = self.attachments.setdefault(key, [])
             if len(pending) >= MAX_PENDING_ATTACHMENTS:
                 raise ValueError("attachment-count-limit")
             current_bytes = sum(int(item.get("size") or 0) for item in pending)
@@ -389,20 +425,25 @@ class BrowserAdapter(BasePlatformAdapter):
             pending.append(attachment)
             return len(pending)
 
-    def _stage_image(self, params):
+    def _stage_image(self, params, owner=None):
         session_id = self._attachment_session_id(params)
         data_url = params.get("data_url") or params.get("content_base64") or params.get("data")
         payload, _declared_mime = self._decode_attachment(data_url, expected_prefix="image/")
         suffix, mime_type = self._sniff_image(payload)
         path = cache_image_from_bytes(payload, ext=suffix)
-        count = self._append_attachment(session_id, {
+        attachment = {
             "path": path,
             "mime_type": mime_type,
             "size": len(payload),
-        })
+        }
+        try:
+            count = self._append_attachment(owner, session_id, attachment)
+        except Exception:
+            self._unlink_staged_attachment(attachment)
+            raise
         return {"attached": True, "path": path, "count": count, "bytes": len(payload)}
 
-    def _stage_file(self, params):
+    def _stage_file(self, params, owner=None):
         session_id = self._attachment_session_id(params)
         payload, mime_type = self._decode_attachment(params.get("data_url"))
         filename = Path(str(params.get("name") or params.get("path") or "")).name
@@ -411,11 +452,16 @@ class BrowserAdapter(BasePlatformAdapter):
         if Path(filename).suffix.lower() not in ALLOWED_DOCUMENT_SUFFIXES:
             raise ValueError("unsupported file type")
         path = cache_document_from_bytes(payload, filename)
-        count = self._append_attachment(session_id, {
+        attachment = {
             "path": path,
             "mime_type": mime_type or "application/octet-stream",
             "size": len(payload),
-        })
+        }
+        try:
+            count = self._append_attachment(owner, session_id, attachment)
+        except Exception:
+            self._unlink_staged_attachment(attachment)
+            raise
         return {"attached": True, "path": path, "name": filename, "count": count, "bytes": len(payload)}
 
     async def _transcribe_voice(self, params):
