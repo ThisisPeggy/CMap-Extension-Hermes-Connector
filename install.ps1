@@ -4,6 +4,14 @@ Set-StrictMode -Version 2
 $repository = 'https://github.com/ThisisPeggy/hermes-browser-connector'
 $pluginName = 'hermes-browser'
 $gatewayStopped = $false
+$revision = if ($env:HERMES_BROWSER_CONNECTOR_COMMIT) {
+    $env:HERMES_BROWSER_CONNECTOR_COMMIT.Trim().ToLowerInvariant()
+} else {
+    'origin/main'
+}
+if ($revision -ne 'origin/main' -and $revision -notmatch '^[0-9a-f]{40}$') {
+    throw 'HERMES_BROWSER_CONNECTOR_COMMIT must be a 40-character Git commit.'
+}
 
 function Invoke-Checked {
     param([scriptblock]$Command, [string]$Message)
@@ -66,9 +74,6 @@ try {
         Write-Host 'Updating Hermes Browser Connector...'
         Get-ChildItem -LiteralPath $pluginDir -Force -Recurse -File -ErrorAction SilentlyContinue |
             ForEach-Object { if ($_.IsReadOnly) { $_.IsReadOnly = $false } }
-        Invoke-Checked { git -C $pluginDir fetch --prune origin } 'Could not download the Connector update.'
-        Invoke-Checked { git -C $pluginDir checkout --force origin/main } 'Could not activate the Connector update.'
-        Invoke-Checked { hermes plugins enable $pluginName --no-allow-tool-override } 'Connector update succeeded, but enabling it failed.'
     } else {
         if (Test-Path -LiteralPath $pluginDir) {
             Write-Host 'Repairing an incomplete Connector installation...'
@@ -77,6 +82,14 @@ try {
         Write-Host 'Installing Hermes Browser Connector...'
         Invoke-Checked { hermes plugins install $repository --enable } 'Connector installation failed.'
     }
+
+    if ($revision -eq 'origin/main') {
+        Invoke-Checked { git -C $pluginDir fetch --prune origin } 'Could not download the Connector update.'
+    } else {
+        Invoke-Checked { git -C $pluginDir fetch --no-tags origin $revision } 'Could not download the reviewed Connector revision.'
+    }
+    Invoke-Checked { git -C $pluginDir checkout --force $revision } 'Could not activate the requested Connector revision.'
+    Invoke-Checked { hermes plugins enable $pluginName --no-allow-tool-override } 'Connector update succeeded, but enabling it failed.'
 
     $python = Get-Command py -ErrorAction SilentlyContinue
     if ($python) {

@@ -6,6 +6,13 @@ plugin_name='hermes-browser'
 hermes_home="${HERMES_HOME:-$HOME/.hermes}"
 plugin_dir="$hermes_home/plugins/$plugin_name"
 gateway_stopped=0
+revision="${HERMES_BROWSER_CONNECTOR_COMMIT:-origin/main}"
+
+case "$revision" in
+  origin/main) ;;
+  *[!0-9a-fA-F]*|'') echo 'HERMES_BROWSER_CONNECTOR_COMMIT must be a 40-character Git commit.' >&2; exit 1 ;;
+  *) [ "${#revision}" -eq 40 ] || { echo 'HERMES_BROWSER_CONNECTOR_COMMIT must be a 40-character Git commit.' >&2; exit 1; } ;;
+esac
 
 restart_gateway() {
   if [ "$gateway_stopped" -eq 1 ]; then
@@ -22,9 +29,6 @@ gateway_stopped=1
 
 if [ -d "$plugin_dir" ] && git -C "$plugin_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo 'Updating Hermes Browser Connector...'
-  git -C "$plugin_dir" fetch --prune origin
-  git -C "$plugin_dir" checkout --force origin/main
-  hermes plugins enable "$plugin_name" --no-allow-tool-override
 else
   if [ -e "$plugin_dir" ]; then
     backup_root="$hermes_home/plugin-backups"
@@ -37,6 +41,14 @@ else
   echo 'Installing Hermes Browser Connector...'
   hermes plugins install "$repository" --enable
 fi
+
+if [ "$revision" = 'origin/main' ]; then
+  git -C "$plugin_dir" fetch --prune origin
+else
+  git -C "$plugin_dir" fetch --no-tags origin "$revision"
+fi
+git -C "$plugin_dir" checkout --force "$revision"
+hermes plugins enable "$plugin_name" --no-allow-tool-override
 
 if command -v python3 >/dev/null 2>&1; then
   python3 "$plugin_dir/connect.py"
