@@ -8,43 +8,23 @@ import logging
 import os
 import re
 import tempfile
-import threading
 import uuid
 from datetime import datetime
-from pathlib import Path
 
 from aiohttp import web, WSMsgType
 from gateway.config import Platform
-from gateway.platforms.base import (
-    BasePlatformAdapter,
-    MessageEvent,
-    MessageType,
-    SendResult,
-    cache_document_from_bytes,
-    cache_image_from_bytes,
-)
+from gateway.platforms.base import BasePlatformAdapter, MessageEvent, MessageType, SendResult
 
+from .attachments import AttachmentStore
 from .protocol import authenticated_subprotocol
 
 logger = logging.getLogger(__name__)
 MAX_VOICE_AUDIO_BYTES = 15 * 1024 * 1024
-MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
-MAX_PENDING_ATTACHMENT_BYTES = 50 * 1024 * 1024
-MAX_PENDING_ATTACHMENTS = 12
 MAX_SESSION_LIST_LIMIT = 500
 VOICE_AUDIO_SUFFIXES = {
     "audio/webm": ".webm", "audio/ogg": ".ogg", "audio/mp4": ".m4a",
     "audio/wav": ".wav", "audio/mpeg": ".mp3",
 }
-ALLOWED_DOCUMENT_SUFFIXES = {
-    ".txt", ".md", ".markdown", ".json", ".csv", ".ts", ".tsx", ".js",
-    ".jsx", ".mjs", ".css", ".html", ".xml", ".yaml", ".yml", ".toml",
-    ".py", ".rs", ".go", ".java", ".c", ".cpp", ".h", ".hpp", ".sql",
-    ".log", ".pdf", ".docx", ".xlsx",
-}
-DATA_URL_RE = re.compile(r"data:([^;,]+);base64,([A-Za-z0-9+/]*={0,2})", re.IGNORECASE)
-
-
 class BrowserAdapter(BasePlatformAdapter):
     supports_async_delivery = False
 
@@ -56,8 +36,7 @@ class BrowserAdapter(BasePlatformAdapter):
         self.clients = set()
         self.pending = {}
         self.tasks = {}
-        self.attachments = {}
-        self.attachment_lock = threading.Lock()
+        self.attachment_store = AttachmentStore()
 
     @property
     def name(self):
@@ -81,7 +60,7 @@ class BrowserAdapter(BasePlatformAdapter):
         for client in list(self.clients):
             await client.close()
         self.clients.clear()
-        self._discard_all_attachments()
+        self.attachment_store.clear()
         if self.runner:
             await self.runner.cleanup()
         self.runner = None
@@ -131,7 +110,7 @@ class BrowserAdapter(BasePlatformAdapter):
                     break
         finally:
             await self._cancel_turns(ws=ws)
-            self._discard_client_attachments(ws)
+            self.attachment_store.discard_owner(ws)
             self.clients.discard(ws)
         return ws
 
@@ -183,7 +162,7 @@ class BrowserAdapter(BasePlatformAdapter):
                 await _result(ws, request_id, {"deleted": deleted, "source": "hermes_browser"})
         elif method == "image.attach_bytes":
             try:
-                result = await asyncio.to_thread(self._stage_image, params, ws)
+                result = await asyncio.to_thread(self.attachment_store.stage_image, ws, params)
             except ValueError as exc:
                 await _error(ws, request_id, -32602, str(exc))
             except Exception as exc:
@@ -193,7 +172,7 @@ class BrowserAdapter(BasePlatformAdapter):
                 await _result(ws, request_id, result)
         elif method == "file.attach":
             try:
-                result = await asyncio.to_thread(self._stage_file, params, ws)
+                result = await asyncio.to_thread(self.attachment_store.stage_file, ws, params)
             except ValueError as exc:
                 await _error(ws, request_id, -32602, str(exc))
             except Exception as exc:
@@ -213,7 +192,7 @@ class BrowserAdapter(BasePlatformAdapter):
             if session_id in self.tasks:
                 await _error(ws, request_id, -32001, "A Browser turn is already running for this session")
                 return
-            attachments = self._take_attachments(ws, session_id)
+            attachments = self.attachment_store.take(ws, session_id)
             await _result(ws, request_id, {"status": "streaming"})
             task = asyncio.create_task(self._prompt(ws, {
                 **params,
@@ -331,139 +310,6 @@ class BrowserAdapter(BasePlatformAdapter):
             if callable(close):
                 close()
 
-    @staticmethod
-    def _attachment_session_id(params):
-        session_id = str(params.get("session_id") or "").strip()
-        if not session_id or len(session_id) > 200:
-            raise ValueError("session_id is required and must not exceed 200 characters")
-        return session_id
-
-    @staticmethod
-    def _decode_attachment(value, *, expected_prefix=""):
-        raw = str(value or "").strip()
-        match = DATA_URL_RE.fullmatch(raw)
-        if not match:
-            raise ValueError("attachment must be a base64 data URL")
-        mime_type = match.group(1).split(";", 1)[0].strip().lower()
-        if expected_prefix and not mime_type.startswith(expected_prefix):
-            raise ValueError(f"attachment must use a {expected_prefix} MIME type")
-        encoded = match.group(2)
-        if len(encoded) > ((MAX_ATTACHMENT_BYTES + 2) // 3) * 4:
-            raise ValueError("attachment-size-limit")
-        try:
-            payload = base64.b64decode(encoded, validate=True)
-        except (binascii.Error, ValueError) as exc:
-            raise ValueError("invalid-attachment-payload") from exc
-        if not payload:
-            raise ValueError("attachment is empty")
-        if len(payload) > MAX_ATTACHMENT_BYTES:
-            raise ValueError("attachment-size-limit")
-        return payload, mime_type
-
-    @staticmethod
-    def _sniff_image(payload):
-        if payload[:8] == b"\x89PNG\r\n\x1a\n":
-            return ".png", "image/png"
-        if payload[:3] == b"\xff\xd8\xff":
-            return ".jpg", "image/jpeg"
-        if payload[:6] in {b"GIF87a", b"GIF89a"}:
-            return ".gif", "image/gif"
-        if payload[:2] == b"BM":
-            return ".bmp", "image/bmp"
-        if payload[:4] == b"RIFF" and len(payload) >= 12 and payload[8:12] == b"WEBP":
-            return ".webp", "image/webp"
-        raise ValueError("unsupported or invalid image payload")
-
-    @staticmethod
-    def _attachment_owner_key(owner, session_id):
-        return (id(owner) if owner is not None else 0, session_id)
-
-    @staticmethod
-    def _unlink_staged_attachment(attachment):
-        path = str(attachment.get("path") or "")
-        if not path:
-            return
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
-
-    def _discard_client_attachments(self, owner):
-        owner_id = id(owner)
-        discarded = []
-        with self.attachment_lock:
-            keys = [key for key in self.attachments if key[0] == owner_id]
-            for key in keys:
-                discarded.extend(self.attachments.pop(key, []))
-        for attachment in discarded:
-            self._unlink_staged_attachment(attachment)
-
-    def _discard_all_attachments(self):
-        with self.attachment_lock:
-            discarded = [attachment for rows in self.attachments.values() for attachment in rows]
-            self.attachments.clear()
-        for attachment in discarded:
-            self._unlink_staged_attachment(attachment)
-
-    def _take_attachments(self, owner, session_id):
-        key = self._attachment_owner_key(owner, session_id)
-        with self.attachment_lock:
-            return self.attachments.pop(key, [])
-
-    def _append_attachment(self, owner, session_id, attachment):
-        lock = getattr(self, "attachment_lock", None)
-        if lock is None:
-            lock = self.attachment_lock = threading.Lock()
-        with lock:
-            key = self._attachment_owner_key(owner, session_id)
-            pending = self.attachments.setdefault(key, [])
-            if len(pending) >= MAX_PENDING_ATTACHMENTS:
-                raise ValueError("attachment-count-limit")
-            current_bytes = sum(int(item.get("size") or 0) for item in pending)
-            if current_bytes + int(attachment.get("size") or 0) > MAX_PENDING_ATTACHMENT_BYTES:
-                raise ValueError("attachment-total-size-limit")
-            pending.append(attachment)
-            return len(pending)
-
-    def _stage_image(self, params, owner=None):
-        session_id = self._attachment_session_id(params)
-        data_url = params.get("data_url") or params.get("content_base64") or params.get("data")
-        payload, _declared_mime = self._decode_attachment(data_url, expected_prefix="image/")
-        suffix, mime_type = self._sniff_image(payload)
-        path = cache_image_from_bytes(payload, ext=suffix)
-        attachment = {
-            "path": path,
-            "mime_type": mime_type,
-            "size": len(payload),
-        }
-        try:
-            count = self._append_attachment(owner, session_id, attachment)
-        except Exception:
-            self._unlink_staged_attachment(attachment)
-            raise
-        return {"attached": True, "path": path, "count": count, "bytes": len(payload)}
-
-    def _stage_file(self, params, owner=None):
-        session_id = self._attachment_session_id(params)
-        payload, mime_type = self._decode_attachment(params.get("data_url"))
-        filename = Path(str(params.get("name") or params.get("path") or "")).name
-        if not filename or len(filename) > 180:
-            raise ValueError("a filename of at most 180 characters is required")
-        if Path(filename).suffix.lower() not in ALLOWED_DOCUMENT_SUFFIXES:
-            raise ValueError("unsupported file type")
-        path = cache_document_from_bytes(payload, filename)
-        attachment = {
-            "path": path,
-            "mime_type": mime_type or "application/octet-stream",
-            "size": len(payload),
-        }
-        try:
-            count = self._append_attachment(owner, session_id, attachment)
-        except Exception:
-            self._unlink_staged_attachment(attachment)
-            raise
-        return {"attached": True, "path": path, "name": filename, "count": count, "bytes": len(payload)}
-
     async def _transcribe_voice(self, params):
         data_url = str(params.get("data_url") or "")
         mime_type = str(params.get("mime_type") or "audio/webm").split(";", 1)[0].lower()
@@ -509,8 +355,8 @@ class BrowserAdapter(BasePlatformAdapter):
             source=source,
             message_id=str(uuid.uuid4()),
             timestamp=datetime.now(),
-            media_urls=[item["path"] for item in attachments],
-            media_types=[item["mime_type"] for item in attachments],
+            media_urls=[item.path for item in attachments],
+            media_types=[item.mime_type for item in attachments],
         )
         try:
             await self.handle_message(event)

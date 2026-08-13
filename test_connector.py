@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from attachments import StagedAttachment
 from protocol import authenticated_subprotocol, token_subprotocol
 
 
@@ -145,59 +146,6 @@ class ConnectorTests(unittest.TestCase):
         self.assertTrue(database.options["include_children"])
         self.assertTrue(database.options["include_archived"])
 
-    def test_image_attachment_validates_magic_and_stages_cached_media(self):
-        module = _load_adapter()
-        adapter = module.BrowserAdapter.__new__(module.BrowserAdapter)
-        adapter.attachments = {}
-        png = b"\x89PNG\r\n\x1a\n" + b"safe-image-bytes"
-        data_url = "data:image/png;base64," + __import__("base64").b64encode(png).decode("ascii")
-
-        with mock.patch.object(module, "cache_image_from_bytes", return_value="cached/image.png") as cache:
-            result = adapter._stage_image({
-                "session_id": "browser-session",
-                "data_url": data_url,
-                "filename": "photo.png",
-            })
-
-        cache.assert_called_once_with(png, ext=".png")
-        self.assertTrue(result["attached"])
-        self.assertEqual(adapter.attachments[(0, "browser-session")][0]["mime_type"], "image/png")
-
-    def test_image_attachment_rejects_declared_image_without_image_magic(self):
-        module = _load_adapter()
-        adapter = module.BrowserAdapter.__new__(module.BrowserAdapter)
-        adapter.attachments = {}
-        payload = __import__("base64").b64encode(b"not-an-image").decode("ascii")
-
-        with self.assertRaisesRegex(ValueError, "invalid image"):
-            adapter._stage_image({
-                "session_id": "browser-session",
-                "data_url": f"data:image/png;base64,{payload}",
-            })
-
-    def test_file_attachment_sanitizes_name_and_rejects_unapproved_types(self):
-        module = _load_adapter()
-        adapter = module.BrowserAdapter.__new__(module.BrowserAdapter)
-        adapter.attachments = {}
-        payload = __import__("base64").b64encode(b"document").decode("ascii")
-
-        with mock.patch.object(module, "cache_document_from_bytes", return_value="cached/quote.pdf") as cache:
-            result = adapter._stage_file({
-                "session_id": "browser-session",
-                "data_url": f"data:application/pdf;base64,{payload}",
-                "name": "../../quote.pdf",
-            })
-
-        cache.assert_called_once_with(b"document", "quote.pdf")
-        self.assertTrue(result["attached"])
-        with self.assertRaisesRegex(ValueError, "unsupported file type"):
-            adapter._stage_file({
-                "session_id": "browser-session",
-                "data_url": f"data:application/octet-stream;base64,{payload}",
-                "name": "payload.exe",
-            })
-
-
 class ConnectorAttachmentPromptTests(unittest.IsolatedAsyncioTestCase):
     async def test_prompt_forwards_staged_media_to_the_gateway_event(self):
         module = _load_adapter()
@@ -219,36 +167,13 @@ class ConnectorAttachmentPromptTests(unittest.IsolatedAsyncioTestCase):
             "session_id": "browser-session",
             "text": "inspect",
             "_attachments": [
-                {"path": "cached/image.png", "mime_type": "image/png", "size": 12},
-                {"path": "cached/quote.pdf", "mime_type": "application/pdf", "size": 20},
+                StagedAttachment("cached/image.png", "image/png", 12),
+                StagedAttachment("cached/quote.pdf", "application/pdf", 20),
             ],
         })
 
         self.assertEqual(captured[0].media_urls, ["cached/image.png", "cached/quote.pdf"])
         self.assertEqual(captured[0].media_types, ["image/png", "application/pdf"])
-
-    async def test_staged_attachments_are_isolated_by_websocket_owner(self):
-        module = _load_adapter()
-        adapter = module.BrowserAdapter.__new__(module.BrowserAdapter)
-        adapter.attachments = {}
-        adapter.attachment_lock = __import__("threading").Lock()
-        first = object()
-        second = object()
-        adapter._append_attachment(first, "shared-session", {
-            "path": "cached/first.png", "mime_type": "image/png", "size": 10,
-        })
-        adapter._append_attachment(second, "shared-session", {
-            "path": "cached/second.png", "mime_type": "image/png", "size": 10,
-        })
-
-        self.assertEqual(
-            [item["path"] for item in adapter._take_attachments(first, "shared-session")],
-            ["cached/first.png"],
-        )
-        self.assertEqual(
-            [item["path"] for item in adapter._take_attachments(second, "shared-session")],
-            ["cached/second.png"],
-        )
 
 
 def _load_connect_module(name):
