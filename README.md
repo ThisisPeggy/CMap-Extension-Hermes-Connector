@@ -1,7 +1,8 @@
 # Hermes Browser Connector
 
-Local Hermes platform connector for the Hermes Browser Extension. It exposes a
-loopback-only authenticated WebSocket and never opens Hermes to the network.
+Local Hermes platform connector for the Hermes Browser Extension. Its Hermes
+WebSocket remains loopback-only. When the user explicitly starts a phone
+transfer, a separate short-lived upload page is opened on the local network.
 
 ## Install or update
 
@@ -32,6 +33,22 @@ The connector listens on `127.0.0.1:8765`. The token is stored in Hermes's
 `.env` file with private permissions, is carried in the WebSocket subprotocol (not
 the URL), and never needs to appear in shell history or process arguments. No
 public port or Hermes API key is needed.
+
+## Send files from a phone
+
+Choose **From phone** in the extension and scan the QR code while the phone and
+computer are on the same local network. The Connector opens a separate LAN
+listener on port `8766` only while a transfer is active. Each channel has a
+random bearer token, accepts the supported attachment formats only, and expires
+after five minutes. The token is placed in the QR URL fragment, removed from the
+phone address bar after loading, and never appears in HTTP request logs.
+
+Phone files are validated and streamed only to the authenticated extension
+WebSocket that created the transfer. They are staged in the open composer and
+are never sent automatically. Set `HERMES_BROWSER_MOBILE_PORT` to change the
+temporary port or `HERMES_BROWSER_MOBILE_HOST` to override the advertised LAN
+address. A host firewall may ask for permission the first time the feature is
+used; only private-network access is needed.
 
 ## Attachment boundary
 

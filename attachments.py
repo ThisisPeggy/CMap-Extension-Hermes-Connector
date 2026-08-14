@@ -32,6 +32,14 @@ DOCUMENT_MIME_TYPES = {
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
+IMAGE_SUFFIXES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".bmp": "image/bmp",
+    ".webp": "image/webp",
+}
 DATA_URL_RE = re.compile(r"data:([^;,]+);base64,([A-Za-z0-9+/]*={0,2})", re.IGNORECASE)
 
 
@@ -170,6 +178,49 @@ def _sniff_image(payload):
     if payload[:4] == b"RIFF" and len(payload) >= 12 and payload[8:12] == b"WEBP":
         return ".webp", "image/webp"
     raise ValueError("unsupported or invalid image payload")
+
+
+def validate_uploaded_attachment(filename, declared_mime, payload):
+    """Validate an untrusted upload and return its safe name and canonical MIME."""
+    name = re.split(r"[/\\\\]", str(filename or ""))[-1].strip()
+    name = "".join(character for character in name if character >= " " and character != "\x7f")
+    if not name or len(name) > 180:
+        raise ValueError("a filename of at most 180 characters is required")
+    if not payload:
+        raise ValueError("attachment is empty")
+    if len(payload) > MAX_ATTACHMENT_BYTES:
+        raise ValueError("attachment-size-limit")
+
+    suffix = Path(name).suffix.lower()
+    declared = str(declared_mime or "application/octet-stream").split(";", 1)[0].strip().lower()
+    try:
+        image_suffix, image_mime = _sniff_image(payload)
+    except ValueError:
+        image_suffix, image_mime = "", ""
+    if suffix in IMAGE_SUFFIXES and not image_mime:
+        raise ValueError("unsupported or invalid image payload")
+    if image_mime:
+        expected = IMAGE_SUFFIXES.get(suffix)
+        if expected and image_mime != expected:
+            raise ValueError("image extension does not match its bytes")
+        if declared != "application/octet-stream" and not declared.startswith("image/"):
+            raise ValueError("image MIME type does not match its bytes")
+        if not expected:
+            stem = name[:-len(suffix)] if suffix else name
+            name = f"{stem}{image_suffix}"
+        return name, image_mime
+
+    canonical = DOCUMENT_MIME_TYPES.get(suffix)
+    if not canonical:
+        raise ValueError("unsupported file type")
+    text_mime = suffix in TEXT_SUFFIXES and (
+        declared.startswith("text/")
+        or declared in {"application/json", "application/xml", "application/javascript", "application/yaml", "application/x-yaml", "application/toml"}
+    )
+    if declared not in {canonical, "application/octet-stream", "text/plain"} and not text_mime:
+        raise ValueError("file MIME type does not match its extension")
+    _validate_document(payload, suffix)
+    return name, canonical
 
 
 def _validate_document(payload, suffix):

@@ -1,8 +1,8 @@
 name: hermes-browser
 label: Hermes Browser
 kind: platform
-version: 0.4.0
-description: Loopback-only WebSocket connector for Hermes Browser Extension.
+version: 0.5.0
+description: Authenticated Browser connector with optional ephemeral phone transfers.
 author: Peggy
 optional_env:
   - name: HERMES_BROWSER_CONNECTOR_TOKEN
@@ -12,4 +12,12 @@ optional_env:
   - name: HERMES_BROWSER_CONNECTOR_PORT
     description: Loopback WebSocket port
     prompt: Connector port
+    secret: false
+  - name: HERMES_BROWSER_MOBILE_PORT
+    description: Temporary phone upload port
+    prompt: Mobile transfer port
+    secret: false
+  - name: HERMES_BROWSER_MOBILE_HOST
+    description: Optional LAN address advertised in phone QR codes
+    prompt: Mobile transfer host
     secret: false

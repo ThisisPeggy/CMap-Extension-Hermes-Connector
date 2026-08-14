@@ -16,6 +16,7 @@ from gateway.config import Platform
 from gateway.platforms.base import BasePlatformAdapter, MessageEvent, MessageType, SendResult
 
 from .attachments import AttachmentStore
+from .mobile_transfer import MobileTransferService
 from .protocol import authenticated_subprotocol
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ class BrowserAdapter(BasePlatformAdapter):
         self.pending = {}
         self.tasks = {}
         self.attachment_store = AttachmentStore()
+        self.mobile_transfers = MobileTransferService(self._mobile_transfer_event)
 
     @property
     def name(self):
@@ -61,6 +63,7 @@ class BrowserAdapter(BasePlatformAdapter):
             await client.close()
         self.clients.clear()
         self.attachment_store.clear()
+        await self.mobile_transfers.close()
         if self.runner:
             await self.runner.cleanup()
         self.runner = None
@@ -79,7 +82,7 @@ class BrowserAdapter(BasePlatformAdapter):
         await _event(ws, "gateway.ready", payload={
             "protocol": 1,
             "connector": "hermes-browser",
-            "version": "0.4.0",
+            "version": "0.5.0",
             "capabilities": {
                 "prompt_submit": True,
                 "session_create": True,
@@ -91,6 +94,7 @@ class BrowserAdapter(BasePlatformAdapter):
                 "session_delete_all": True,
                 "image_attach_bytes": True,
                 "file_attach": True,
+                "mobile_transfer": True,
                 "model_options": False,
             },
         })
@@ -110,6 +114,7 @@ class BrowserAdapter(BasePlatformAdapter):
                     break
         finally:
             await self._cancel_turns(ws=ws)
+            await self.mobile_transfers.discard_owner(ws)
             self.attachment_store.discard_owner(ws)
             self.clients.discard(ws)
         return ws
@@ -180,6 +185,17 @@ class BrowserAdapter(BasePlatformAdapter):
                 await _error(ws, request_id, -32009, "Hermes file attachment failed")
             else:
                 await _result(ws, request_id, result)
+        elif method == "mobile_transfer.create":
+            try:
+                result = await self.mobile_transfers.create(ws)
+            except Exception as exc:
+                logger.warning("Browser mobile transfer failed to start: %s", exc)
+                await _error(ws, request_id, -32010, "Could not open a phone transfer on this network")
+            else:
+                await _result(ws, request_id, result)
+        elif method == "mobile_transfer.cancel":
+            result = await self.mobile_transfers.cancel(ws, str(params.get("transfer_id") or ""))
+            await _result(ws, request_id, result)
         elif method == "prompt.submit":
             session_id = str(params.get("session_id") or "").strip()
             text = str(params.get("text") or "").strip()
@@ -370,6 +386,9 @@ class BrowserAdapter(BasePlatformAdapter):
             await _event(ws, "error", session_id, {"message": str(exc)})
         finally:
             self.pending.pop(session_id, None)
+
+    async def _mobile_transfer_event(self, ws, kind, payload):
+        await _event(ws, kind, payload=payload)
 
     def _task_finished(self, session_id, task):
         current = self.tasks.get(session_id)
