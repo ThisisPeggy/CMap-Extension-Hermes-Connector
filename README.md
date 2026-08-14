@@ -1,4 +1,4 @@
-# CMap Extension Connector
+# CMap Extension Hermes Connector
 
 Local Hermes platform connector for CMap Extension. Its Hermes
 WebSocket remains loopback-only. When the user explicitly starts a phone
@@ -13,13 +13,13 @@ checkouts are updated without deleting the plugin directory.
 ### Windows (PowerShell)
 
 ```powershell
-irm https://raw.githubusercontent.com/ThisisPeggy/hermes-browser-connector/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/ThisisPeggy/CMap-Extension-Hermes-Connector/main/install.ps1 | iex
 ```
 
 ### macOS and Linux
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ThisisPeggy/hermes-browser-connector/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ThisisPeggy/CMap-Extension-Hermes-Connector/main/install.sh | sh
 ```
 
 The Browser extension generates the pairing token. Paste it into the hidden

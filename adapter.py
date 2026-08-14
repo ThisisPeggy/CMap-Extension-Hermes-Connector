@@ -54,7 +54,7 @@ class BrowserAdapter(BasePlatformAdapter):
         await self.runner.setup()
         await web.TCPSite(self.runner, "127.0.0.1", self.port).start()
         self._mark_connected()
-        logger.info("CMap Extension Connector listening on 127.0.0.1:%s", self.port)
+        logger.info("CMap Extension Hermes Connector listening on 127.0.0.1:%s", self.port)
         return True
 
     async def disconnect(self):
