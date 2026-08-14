@@ -27,9 +27,9 @@ def main():
     )
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
-    token = (args.token or getpass.getpass("Paste Hermes Browser pairing token: ")).strip()
+    token = (args.token or getpass.getpass("Paste CMap Extension pairing token: ")).strip()
     if len(token) < 32 or any(ch.isspace() for ch in token):
-        raise SystemExit("Invalid Hermes Browser pairing token.")
+        raise SystemExit("Invalid CMap Extension pairing token.")
     if not 1024 <= args.port <= 65535:
         raise SystemExit("Invalid connector port.")
     _write_env({
@@ -37,7 +37,7 @@ def main():
         "HERMES_BROWSER_CONNECTOR_PORT": str(args.port),
         "HERMES_BROWSER_CONNECTOR_ALLOW_ALL_USERS": "true",
     })
-    print("Hermes Browser is paired. Restart the Hermes gateway:")
+    print("CMap Extension is paired. Restart the Hermes gateway:")
     print("  hermes gateway restart")
 
 

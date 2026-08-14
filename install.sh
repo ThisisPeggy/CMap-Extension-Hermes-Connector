@@ -28,7 +28,7 @@ hermes gateway stop >/dev/null 2>&1 || true
 gateway_stopped=1
 
 if [ -d "$plugin_dir" ] && git -C "$plugin_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  echo 'Updating Hermes Browser Connector...'
+  echo 'Updating CMap Extension Connector...'
 else
   if [ -e "$plugin_dir" ]; then
     backup_root="$hermes_home/plugin-backups"
@@ -38,7 +38,7 @@ else
     mv "$plugin_dir" "$backup_path"
     echo "Moved the incomplete Connector to $backup_path"
   fi
-  echo 'Installing Hermes Browser Connector...'
+  echo 'Installing CMap Extension Connector...'
   hermes plugins install "$repository" --enable
 fi
 
@@ -56,4 +56,4 @@ else
   python "$plugin_dir/connect.py"
 fi
 
-echo 'Hermes Browser Connector is ready.'
+echo 'CMap Extension Connector is ready.'

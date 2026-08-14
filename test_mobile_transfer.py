@@ -158,6 +158,9 @@ class MobilePageTests(unittest.TestCase):
         self.assertIn("sessionStorage.setItem", page)
         self.assertIn("history.replaceState", page)
         self.assertIn("never sent automatically", page)
+        self.assertIn("Send to CMap Extension", page)
+        self.assertIn("发送到 CMap Extension", page)
+        self.assertNotIn("Hermes Browser", page)
         self.assertNotIn("https://", page)
 
     def test_lan_selection_rejects_clash_tun_fake_ip(self):

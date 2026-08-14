@@ -1,8 +1,8 @@
 name: hermes-browser
-label: Hermes Browser
+label: CMap Extension
 kind: platform
 version: 0.5.0
-description: Authenticated Browser connector with optional ephemeral phone transfers.
+description: Authenticated CMap Extension connector with optional ephemeral phone transfers.
 author: Peggy
 optional_env:
   - name: HERMES_BROWSER_CONNECTOR_TOKEN

@@ -1,6 +1,6 @@
-# Hermes Browser Connector
+# CMap Extension Connector
 
-Local Hermes platform connector for the Hermes Browser Extension. Its Hermes
+Local Hermes platform connector for CMap Extension. Its Hermes
 WebSocket remains loopback-only. When the user explicitly starts a phone
 transfer, a separate short-lived upload page is opened on the local network.
 

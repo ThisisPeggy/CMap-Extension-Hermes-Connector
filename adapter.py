@@ -1,4 +1,4 @@
-"""Loopback WebSocket platform adapter for Hermes Browser."""
+"""Loopback WebSocket platform adapter for CMap Extension."""
 
 import asyncio
 import base64
@@ -42,11 +42,11 @@ class BrowserAdapter(BasePlatformAdapter):
 
     @property
     def name(self):
-        return "Hermes Browser"
+        return "CMap Extension"
 
     async def connect(self, *, is_reconnect=False):
         if not self.token:
-            self._set_fatal_error("config_missing", "Run the Hermes Browser pairing command.", retryable=False)
+            self._set_fatal_error("config_missing", "Run the CMap Extension pairing command.", retryable=False)
             return False
         app = web.Application()
         app.router.add_get("/ws", self._websocket)
@@ -54,7 +54,7 @@ class BrowserAdapter(BasePlatformAdapter):
         await self.runner.setup()
         await web.TCPSite(self.runner, "127.0.0.1", self.port).start()
         self._mark_connected()
-        logger.info("Hermes Browser connector listening on 127.0.0.1:%s", self.port)
+        logger.info("CMap Extension Connector listening on 127.0.0.1:%s", self.port)
         return True
 
     async def disconnect(self):
@@ -145,7 +145,7 @@ class BrowserAdapter(BasePlatformAdapter):
             try:
                 messages = await asyncio.to_thread(self._session_history, session_id)
             except LookupError:
-                await _error(ws, request_id, -32004, "Hermes Browser session not found")
+                await _error(ws, request_id, -32004, "CMap Extension session not found")
             except Exception as exc:
                 logger.warning("Browser session history failed: %s", exc)
                 await _error(ws, request_id, -32005, "Hermes session history failed")
@@ -162,7 +162,7 @@ class BrowserAdapter(BasePlatformAdapter):
                 deleted = await asyncio.to_thread(self._delete_all_sessions)
             except Exception as exc:
                 logger.warning("Browser session deletion failed: %s", exc)
-                await _error(ws, request_id, -32007, "Hermes Browser session deletion failed")
+                await _error(ws, request_id, -32007, "CMap Extension session deletion failed")
             else:
                 await _result(ws, request_id, {"deleted": deleted, "source": "hermes_browser"})
         elif method == "image.attach_bytes":
@@ -363,7 +363,7 @@ class BrowserAdapter(BasePlatformAdapter):
         completion = asyncio.get_running_loop().create_future()
         self.pending[session_id] = {"ws": ws, "completion": completion, "content": ""}
         await _event(ws, "message.start", session_id)
-        source = self.build_source(chat_id=session_id, chat_name="Hermes Browser", chat_type="dm", user_id="browser", user_name="Browser user")
+        source = self.build_source(chat_id=session_id, chat_name="CMap Extension", chat_type="dm", user_id="browser", user_name="Browser user")
         attachments = params.get("_attachments") or []
         event = MessageEvent(
             text=text,
@@ -441,7 +441,7 @@ class BrowserAdapter(BasePlatformAdapter):
         return None
 
     async def get_chat_info(self, chat_id):
-        return {"name": "Hermes Browser", "type": "dm", "chat_id": str(chat_id)}
+        return {"name": "CMap Extension", "type": "dm", "chat_id": str(chat_id)}
 
 
 async def _result(ws, request_id, result):
@@ -463,7 +463,7 @@ def _enabled():
 def register(ctx):
     ctx.register_platform(
         name="hermes_browser",
-        label="Hermes Browser",
+        label="CMap Extension",
         adapter_factory=lambda cfg: BrowserAdapter(cfg),
         check_fn=_enabled,
         validate_config=lambda cfg: _enabled(),

@@ -1,4 +1,4 @@
-"""Hermes Browser local connector."""
+"""CMap Extension local connector."""
 
 from .adapter import register
 

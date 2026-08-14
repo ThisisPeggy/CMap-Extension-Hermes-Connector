@@ -71,7 +71,7 @@ try {
     $pluginDir = Join-Path (Join-Path $hermesHome 'plugins') $pluginName
 
     if ((Test-Path -LiteralPath $pluginDir) -and (Test-GitCheckout $pluginDir)) {
-        Write-Host 'Updating Hermes Browser Connector...'
+        Write-Host 'Updating CMap Extension Connector...'
         Get-ChildItem -LiteralPath $pluginDir -Force -Recurse -File -ErrorAction SilentlyContinue |
             ForEach-Object { if ($_.IsReadOnly) { $_.IsReadOnly = $false } }
     } else {
@@ -79,7 +79,7 @@ try {
             Write-Host 'Repairing an incomplete Connector installation...'
             Move-BrokenConnector $pluginDir $hermesHome
         }
-        Write-Host 'Installing Hermes Browser Connector...'
+        Write-Host 'Installing CMap Extension Connector...'
         Invoke-Checked { hermes plugins install $repository --enable } 'Connector installation failed.'
     }
 
@@ -97,7 +97,7 @@ try {
     } else {
         Invoke-Checked { python3 (Join-Path $pluginDir 'connect.py') } 'Connector pairing failed.'
     }
-    Write-Host 'Hermes Browser Connector is ready.' -ForegroundColor Green
+    Write-Host 'CMap Extension Connector is ready.' -ForegroundColor Green
 } finally {
     if ($gatewayStopped) { & hermes gateway restart }
 }
