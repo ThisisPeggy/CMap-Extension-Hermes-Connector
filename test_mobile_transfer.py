@@ -160,6 +160,17 @@ class MobilePageTests(unittest.TestCase):
         self.assertIn("never sent automatically", page)
         self.assertNotIn("https://", page)
 
+    def test_lan_selection_rejects_clash_tun_fake_ip(self):
+        selected = mobile_transfer.select_lan_address([
+            ("198.18.0.1", 0),
+            ("192.168.2.31", 1),
+        ])
+        self.assertEqual(selected, "192.168.2.31")
+
+    def test_lan_selection_fails_instead_of_showing_an_unreachable_fake_ip(self):
+        with self.assertRaisesRegex(RuntimeError, "No reachable local network"):
+            mobile_transfer.select_lan_address([("198.18.0.1", 0), ("127.0.0.1", 1)])
+
 
 if __name__ == "__main__":
     unittest.main()

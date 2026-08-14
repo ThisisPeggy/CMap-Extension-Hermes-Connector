@@ -20,6 +20,7 @@ from .attachments import validate_uploaded_attachment
 DEFAULT_MOBILE_PORT = 8766
 DEFAULT_TRANSFER_TTL_SECONDS = 5 * 60
 MAX_MOBILE_IMAGES = 6
+BENCHMARK_NETWORK = ipaddress.ip_network("198.18.0.0/15")
 
 
 @dataclass
@@ -249,22 +250,52 @@ def discover_lan_address():
     probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         probe.connect(("192.0.2.1", 80))
-        candidates.append(probe.getsockname()[0])
+        candidates.append((probe.getsockname()[0], 0))
     except OSError:
         pass
     finally:
         probe.close()
     try:
-        candidates.extend(info[4][0] for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET))
+        candidates.extend((info[4][0], 1) for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET))
     except OSError:
         pass
-    for candidate in dict.fromkeys(candidates):
+    return select_lan_address(candidates)
+
+
+def select_lan_address(candidates):
+    """Prefer a routed LAN address while rejecting proxy/TUN fake-IP ranges."""
+    ranked = []
+    seen = set()
+    for candidate, source_rank in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
         try:
             address = ipaddress.ip_address(candidate)
         except ValueError:
             continue
-        if not address.is_loopback and not address.is_link_local and not address.is_unspecified:
-            return candidate
+        if (
+            address.version != 4
+            or address in BENCHMARK_NETWORK
+            or address.is_loopback
+            or address.is_link_local
+            or address.is_unspecified
+            or address.is_multicast
+        ):
+            continue
+        if address in ipaddress.ip_network("192.168.0.0/16"):
+            private_rank = 0
+        elif address in ipaddress.ip_network("172.16.0.0/12"):
+            private_rank = 1
+        elif address in ipaddress.ip_network("10.0.0.0/8"):
+            private_rank = 2
+        elif address.is_global:
+            private_rank = 3
+        else:
+            continue
+        ranked.append(((int(source_rank), private_rank), candidate))
+    if ranked:
+        return min(ranked)[1]
     raise RuntimeError("No reachable local network address was found.")
 
 
