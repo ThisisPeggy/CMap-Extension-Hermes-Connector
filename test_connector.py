@@ -60,6 +60,8 @@ class ConnectorTests(unittest.TestCase):
         shell = (root / "install.sh").read_text(encoding="utf-8")
         self.assertIn("git -C $pluginDir fetch", powershell)
         self.assertIn('git -C "$plugin_dir" fetch', shell)
+        self.assertIn("remote set-url origin $repository", powershell)
+        self.assertIn('remote set-url origin "$repository"', shell)
         self.assertIn("HERMES_BROWSER_CONNECTOR_COMMIT", powershell)
         self.assertIn("HERMES_BROWSER_CONNECTOR_COMMIT", shell)
         self.assertIn("checkout --force $revision", powershell)

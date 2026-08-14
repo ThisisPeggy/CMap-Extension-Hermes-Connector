@@ -83,6 +83,7 @@ try {
         Invoke-Checked { hermes plugins install $repository --enable } 'Connector installation failed.'
     }
 
+    Invoke-Checked { git -C $pluginDir remote set-url origin $repository } 'Could not update the Connector repository URL.'
     if ($revision -eq 'origin/main') {
         Invoke-Checked { git -C $pluginDir fetch --prune origin } 'Could not download the Connector update.'
     } else {

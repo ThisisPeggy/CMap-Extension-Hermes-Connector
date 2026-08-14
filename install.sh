@@ -42,6 +42,7 @@ else
   hermes plugins install "$repository" --enable
 fi
 
+git -C "$plugin_dir" remote set-url origin "$repository"
 if [ "$revision" = 'origin/main' ]; then
   git -C "$plugin_dir" fetch --prune origin
 else
