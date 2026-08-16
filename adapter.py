@@ -82,7 +82,7 @@ class BrowserAdapter(BasePlatformAdapter):
         await _event(ws, "gateway.ready", payload={
             "protocol": 1,
             "connector": "hermes-browser",
-            "version": "0.5.0",
+            "version": "0.5.1",
             "capabilities": {
                 "prompt_submit": True,
                 "session_create": True,
@@ -95,7 +95,7 @@ class BrowserAdapter(BasePlatformAdapter):
                 "image_attach_bytes": True,
                 "file_attach": True,
                 "mobile_transfer": True,
-                "model_options": False,
+                "model_options": True,
             },
         })
         try:
@@ -165,6 +165,14 @@ class BrowserAdapter(BasePlatformAdapter):
                 await _error(ws, request_id, -32007, "CMap Extension session deletion failed")
             else:
                 await _result(ws, request_id, {"deleted": deleted, "source": "hermes_browser"})
+        elif method == "model.options":
+            try:
+                options = await asyncio.to_thread(self._model_options, params.get("refresh") is True)
+            except Exception as exc:
+                logger.warning("Hermes model options failed: %s", exc)
+                await _error(ws, request_id, -32011, "Hermes model options failed")
+            else:
+                await _result(ws, request_id, options)
         elif method == "image.attach_bytes":
             try:
                 result = await asyncio.to_thread(self.attachment_store.stage_image, ws, params)
@@ -325,6 +333,11 @@ class BrowserAdapter(BasePlatformAdapter):
             close = getattr(db, "close", None)
             if callable(close):
                 close()
+
+    @staticmethod
+    def _model_options(refresh=False):
+        from hermes_cli.inventory import build_model_options_payload, load_picker_context
+        return build_model_options_payload(load_picker_context(), refresh=bool(refresh))
 
     async def _transcribe_voice(self, params):
         data_url = str(params.get("data_url") or "")

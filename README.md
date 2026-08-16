@@ -60,3 +60,7 @@ extensions are validated before a staged attachment is passed to the existing
 Hermes media pipeline. Pending attachments are isolated to the authenticated
 WebSocket that staged them and unused cache files are removed on disconnect.
 Unknown RPC methods remain blocked.
+
+The authenticated WebSocket also exposes Hermes's canonical model picker
+catalog through `model.options`, so the extension can select configured models
+instead of falling back to the generic Hermes Agent label.

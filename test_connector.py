@@ -154,6 +154,23 @@ class ConnectorTests(unittest.TestCase):
         self.assertTrue(database.options["include_children"])
         self.assertTrue(database.options["include_archived"])
 
+    def test_model_options_reuses_the_canonical_hermes_inventory(self):
+        module = _load_adapter()
+        context = object()
+        inventory = mock.Mock()
+        inventory.load_picker_context.return_value = context
+        inventory.build_model_options_payload.return_value = {
+            "providers": [{"slug": "nous", "models": ["openai/gpt-5.6-luna"]}],
+            "model": "openai/gpt-5.6-luna",
+            "provider": "nous",
+        }
+
+        with mock.patch.dict(sys.modules, {"hermes_cli.inventory": inventory}):
+            result = module.BrowserAdapter._model_options(refresh=True)
+
+        inventory.build_model_options_payload.assert_called_once_with(context, refresh=True)
+        self.assertEqual(result["providers"][0]["models"], ["openai/gpt-5.6-luna"])
+
 class ConnectorAttachmentPromptTests(unittest.IsolatedAsyncioTestCase):
     async def test_prompt_forwards_staged_media_to_the_gateway_event(self):
         module = _load_adapter()
